@@ -14,9 +14,6 @@ const LOSE_GIF = process.env.LOSE_GIF!;
 let jackpotAmount = Number(process.env.JACKPOT_AMOUNT) || 100000;
 
 
-//let jackpotAmount = 100000; // example value
-//const symbol = 'VILLA';
-
 function socials() {
   return {
     inline_keyboard: [
