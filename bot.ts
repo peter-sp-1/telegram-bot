@@ -1,8 +1,17 @@
 import { Telegraf } from 'telegraf';
 import { Message, MessageEntity } from 'telegraf/typings/core/types/typegram';
 
+import { Connection, Keypair, PublicKey, LAMPORTS_PER_SOL, sendAndConfirmTransaction, SystemProgram, Transaction } from '@solana/web3.js';
 import dotenv from 'dotenv';
 dotenv.config();
+
+const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+
+//const privateKeyBytes = Uint8Array.from(Buffer.from(privateKeyHex, 'hex'));
+const payer = Keypair.fromSecretKey(
+  Uint8Array.from(JSON.parse(process.env.SOLANA_PRIVATE_KEY!))
+);
+
 
 const BOT_TOKEN = process.env.BOT_TOKEN!;
 const bot = new Telegraf(BOT_TOKEN);
@@ -23,16 +32,40 @@ function socials() {
   };
 }
 
-async function calculateProbability(value: number): Promise<number> {
+async function transferSolana(to: string, amount: number): Promise<string> {
   try {
-    if (value >= 1 && value < 10) return Math.floor(value);
-    else if (value >= 10) return 10;
-    else return 1;
+    const recipient = new PublicKey(to);
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: payer.publicKey,
+        toPubkey: recipient,
+        lamports: amount * LAMPORTS_PER_SOL,
+      })
+    );
+
+    const signature = await sendAndConfirmTransaction(connection, transaction, [payer]);
+    console.log(`✅ Sent ${amount} SOL to ${to}. Txn: ${signature}`);
+    return signature;
   } catch (error) {
-    console.error("Error::calculateProbability", error);
-    return 1;
+    console.error('❌ Transfer failed:', error);
+    throw error;
   }
 }
+
+async function calculateProbability(value: number): Promise<number> {
+  try {
+    // Ensure 0.5 SOL has a higher probability
+    if (value >= 0.5 && value < 1) return 50;  // 50% win chance for 0.5 SOL
+    if (value >= 1 && value < 5) return 30;   // 30% win chance for 1 SOL
+    if (value >= 5) return 20;                // 20% win chance for 5 SOL and above
+    return 10;                                // Default lower probability for lower amounts
+  } catch (error) {
+    console.error("Error::calculateProbability", error);
+    return 10;
+  }
+}
+
+
 
 async function percentageOfJackpot(supply = 99499888.98): Promise<number> {
   try {
@@ -42,7 +75,7 @@ async function percentageOfJackpot(supply = 99499888.98): Promise<number> {
     return 1;
   }
 }
-
+  
 const winning_number = Math.floor(Math.random() * 100);
 const pot_of_samples = 100; // Or however you compute this
 
@@ -59,22 +92,31 @@ async function sendWin(
   pot_of_samples: number
 ) {
   const percentOfJackpot = await percentageOfJackpot();
-  const caption = `🚀 New Play! ${solUsed.toFixed(3)} SOL was used!\n\n` +
+
+  const caption =
+    `🚀 New Play! ${solUsed.toFixed(3)} ${symbol} tokens were used\n\n` +
     `<b>🏆 WINNER 🏆</b>\n\n` +
-    `🎰 Jackpot value: <b>${jack.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${symbol} ($${usdReward.toFixed(2)})</b>\n` +
-    `⏳ Current jackpot share: <b>${percentOfJackpot.toFixed(2)}%</b>\n\n` +
-    `💳 Buy amount: <b>${solUsed.toFixed(3)} SOL ($${usdReward.toFixed(1)})</b>\n` +
-    `📊 Probability of win: <b>${perc}%</b>\n\n` +
+    `🎰 Jackpot: <b>${jack.toFixed(3)} SOL ($${usdReward.toFixed(2)})</b>\n` +
+    `💳 Buy-in: <b>${solUsed.toFixed(3)} SOL</b>\n` +
+    `📊 Win Chance: <b>${perc}%</b>\n\n` +
     `🥏 <u>Winning Num: ${winning_number}</u>\n` +
     `🎲 Pot: <b>${pot_of_samples}</b>\n\n` +
-    `🔗 Txn: <a href="https://solscan.io/tx/${trx}">${trx}</a>\n` +
-    `👤 Address: <a href="https://solscan.io/account/${sender}">${sender}</a>`;
+    `🔗 <a href="https://solscan.io/tx/${trx}">View Txn</a> | <a href="https://solscan.io/account/${sender}">Winner</a>`;
 
+  // Send win message
   await bot.telegram.sendPhoto(group, WIN_GIF, {
     caption,
     parse_mode: 'HTML',
     reply_markup: socials(),
   });
+
+  // Transfer jackpot in SOL
+  try {
+    const txSig = await transferSolana(sender, jack);
+    console.log(`✅ Jackpot of ${jack} SOL sent. Txn: ${txSig}`);
+  } catch (err) {
+    console.error("❌ Error sending jackpot to winner:", err);
+  }
 }
 
 
@@ -156,7 +198,12 @@ bot.on('message', async (ctx) => {
       console.log('Txn Hash:', txnHash);
     
       const perc = await calculateProbability(solAmount);
-      const hit = Math.random() * 100 < perc;
+      console.log('Calculated Probability:', perc);
+
+      const percentOfJackpot = await percentageOfJackpot();
+      console.log('Calculated Percentage of Jackpot:', percentOfJackpot);  // Log the result
+
+      const hit = perc === 100 || Math.random() * 100 < perc; 
 
       console.log('Hit:', hit);
       if (hit) {
